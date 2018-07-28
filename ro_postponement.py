@@ -51,7 +51,11 @@ import os
 import sys
 
 
-def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits, invCost, flowCost, arcs, paths, instance):
+def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
+                  bits, invCost, flowCost, arcs, paths, capCost, capPaths, \
+                  pathGroup, instance):
+    
+    numGroups = len(capCost)
 
     for i,j in paths:
       print i,j,flowCost[(i,j)], "\n"
@@ -84,6 +88,9 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
     s_plant = {}
 
     s_prod = {}
+    
+    # capacity variables
+    cap = {}
 
     # delta represents sum of first stage inv cost, 2nd stage underage cost, and flow costs
 
@@ -100,6 +107,9 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
         s_prod[j] = m.addVar(lb=0.0, name='s_%s' % j, obj=invCost[j+len(plants)])
 
         m.update()
+        
+    for g in range(numGroups):
+        cap[g] = m.addVar(lb=0.0, name='cap_%s' % g, obj=capCost[g])
 
 #    m.addConstr(quicksum(s[j] for j in products) == preallocated_cap*total_capacity)
 
@@ -117,7 +127,7 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
 
     bi.setParam('OutputFlag', 0)
 
-    p = {}; q = {}; y = {}; d = {}; xi = {};
+    p = {}; q = {}; y = {}; d = {}; xi = {}; pp = {};
 
     for j in products:
 
@@ -136,6 +146,10 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
     for i in plants:
 
         p[i] = bi.addVar()
+    
+    for g in range(numGroups):
+        
+        pp[g] = bi.addVar()
 
     for i in allNodes:
 
@@ -147,9 +161,9 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
 
     for i,j in paths:
 
-        bi.addConstr(quicksum(q[(j,n)]*2**n for n in bits) - p[i]
-
-                    <= flowCost[(i,j)]) # flexibility constraint
+        bi.addConstr(quicksum(q[(j,n)]*2**n for n in bits) - p[i] \
+                     - quicksum(pp[g] for i,j,g in pathGroup.select(i,j,'*')) \
+                     <= flowCost[(i,j)]) # flexibility constraint
 
     for j in products:
 
@@ -227,6 +241,9 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
         for i in plants:
 
             p[i].setAttr("obj",-s_plant[i].x)
+        
+        for g in range(numGroups):
+            pp[g].setAttr("obj", -cap[g].x)
 
         #bi.setAttr("objCon", -delta.x)
 
@@ -259,8 +276,11 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits
 
                 m.addConstr(quicksum(flow[i,j, count_constr] for i,j in paths.select('*',j)) + lost[j, count_constr] + s_prod[j] >= d[j].x)
 
-                # Lost sales constaint
-
+            # 
+            for g in range(numGroups): # CHECK if capPaths can take this function select
+                m.addConstr(quicksum(flow[i,j, count_constr] for i,j,g in pathGroup.select('*','*',g)) <= cap[g])
+            
+            # Lost sales constaint 
             m.addConstr(quicksum(flow[i,j, count_constr] * flowCost[(i,j)] for i,j in paths) + quicksum(lost[j, count_constr]*underage_margin[j] for j in products)<= delta)
 
             count_constr += 1
@@ -561,15 +581,109 @@ for line_in in arcFile:
 
 arcs = tuplelist(arcs)
 
+# TODO 
+# Remove pathGroupTree and pathGroupFull, using the tuple versions at the moement
+
+# Generalized capacity constraints, for groups of paths.
+# Length of each of the data structures is the total number of groups
+# cTree: capacities for different groups. This might not be needed since we
+#       probably only do soft constraints.
+# cCostTree: per unit capacity cost for each group of arcs.
+# cPathsTree: paths included in each capacitated group
+cTree = {}
+cCostTree = {}
+cPathsTree = {}
+capacityTreeFile = open("IO/instance_"+str(instance)+"_capacityTree.txt", "r")
+index = 0
+for line_in in capacityTreeFile:
+
+    line = line_in.strip().split(',')    
+    arcString = line[2].strip().split(';')    
+    if len(arcString) == 1: # no arcs
+        continue
+
+    cTree[index] = float(line[0])    
+    cCostTree[index] = float(line[1])
+    cPathsTree[index] = () # tuple is hashable
+    
+    for i in range(len(arcString)):
+        pairs = arcString[i].strip().split('-')
+        if len(pairs) < 2:
+            continue
+        source = int(pairs[0]) - 1
+        sink = int(pairs[1]) - 1
+        cPathsTree[index] = cPathsTree[index] + ([source, sink],)
+    index += 1
+
+numGroupsTree = index
+pathGroupTree = numpy.zeros((numNodes[0],numNodes[0],numGroupsTree))
+pathGroupTreeTuple = []
+for g in range(len(cPathsTree)):
+    for e in range(len(cPathsTree[g])):
+        i = cPathsTree[g][e][0]
+        j = cPathsTree[g][e][1]
+        pathGroupTree[i,j,g] = 1
+        pathGroupTreeTuple += [(i,j,g)]
+pathGroupTreeTuple = tuplelist(pathGroupTreeTuple)
+
+cFull = {}
+cCostFull = {}
+cPathsFull = {}
+capacityFullFile = open("IO/instance_"+str(instance)+"_capacityFull.txt", "r")
+index = 0
+for line_in in capacityFullFile:
+
+    line = line_in.strip().split(',')    
+    arcString = line[2].strip().split(';')        
+    if len(arcString) == 1: # no arcs
+        continue
+
+    cFull[index] = float(line[0])    
+    cCostFull[index] = float(line[1])
+    cPathsFull[index] = () # tuple is hashable
+    
+    for i in range(len(arcString)):
+        pairs = arcString[i].strip().split('-')
+        if len(pairs) < 2:
+            continue
+        source = int(pairs[0]) - 1
+        sink = int(pairs[1]) - 1
+        cPathsFull[index] = cPathsFull[index] + ([source, sink],)
+    index += 1
+
+numGroupsFull = index
+pathGroupFull = numpy.zeros((numNodes[0],numNodes[0],numGroupsFull))
+pathGroupFullTuple = []
+for g in range(len(cPathsFull)):
+    for e in range(len(cPathsFull[g])):
+        i = cPathsFull[g][e][0]
+        j = cPathsFull[g][e][1]
+        pathGroupFull[i,j,g] = 1
+        pathGroupFullTuple += [(i,j,g)]
+pathGroupFullTuple = tuplelist(pathGroupFullTuple)
 
 ## new optimization call by me
 
 #    [time_diffinstance[k], constrs_diffinstance[k], sol, objVal[k]] = ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits, invCost, flowCost, arcs, paths)
 
 
-[time_diffinstance_tree[0], constrs_diffinstance_tree[0], sol_tree, objVal_tree[0], totalInvCost_tree, totalFlowCost_tree, totalDemandLossCost_tree, subObj_tree, subGap_tree] = ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits, invCost, flowCost_tree, arcs, paths_tree, instance)
+[time_diffinstance_tree[0], constrs_diffinstance_tree[0], \
+ sol_tree, objVal_tree[0], totalInvCost_tree, totalFlowCost_tree, \
+ totalDemandLossCost_tree, subObj_tree, subGap_tree] = \
+ ro_opt_rowcol(plants, products, allNodes, dmean, dvar, \
+               underage_margin, bits, invCost, \
+               flowCost_tree, arcs, paths_tree, \
+               cCostTree, cPathsTree, pathGroupTreeTuple, \
+               instance)
 
-[time_diffinstance[0], constrs_diffinstance[0], sol, objVal[0], totalInvCost, totalFlowCost, totalDemandLossCost, subObj, subGap] =                                              ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, bits, invCost, flowCost,      arcs, paths, instance)
+[time_diffinstance[0], constrs_diffinstance[0], \
+ sol, objVal[0], totalInvCost, totalFlowCost, \
+ totalDemandLossCost, subObj, subGap] = \
+ ro_opt_rowcol(plants, products, allNodes, dmean, dvar, \
+               underage_margin, bits, invCost, \
+               flowCost, arcs, paths, \
+               cCostFull, cPathsFull, pathGroupFullTuple, \
+               instance)
 
 write_data.write('instance#, ')
 
