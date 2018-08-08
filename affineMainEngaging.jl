@@ -14,7 +14,7 @@ engagingDir = "IO/"
 srand(314);
 tempDir = engagingDir;
 cleanDir = engagingDir;
-numInstances = 3600;
+numInstances = 200;
 numNodesList = zeros(numInstances);
 affineObj = zeros(numInstances,2); # first column for tree network, second for general network based on this tree
 affineSolTime = zeros(numInstances);
@@ -176,14 +176,8 @@ for instance = 1:numInstances
     # Each line is a group, in the form of capacity, cost per capacity, i-j;a-b;
   # Store cost per capacity in an array, index is the group ID
   # Store arcs of capacity groups in a Dict(), index by group ID and
-
-  println("")
-  println("****")
-  dir = "IO/instance_1_" # For local testing
-
   capCostTree = Float64[]
   capPathsTree = Dict()
-
   open(string(dir,"capacityTree.txt")) do file
     index = 1
     lines = readlines(file)
@@ -209,13 +203,33 @@ for instance = 1:numInstances
     end
   end
 
+  capCostFull = Float64[]
+  capPathsFull = Dict()
+  open(string(dir,"capacityFull.txt")) do file
+    index = 1
+    lines = readlines(file)
+    for l in lines
+      input = split(strip(l),',') # can do this in 0.5 and beyond
+      if input[3] == ""
+        continue
+      end
+      cap = parse(Float64, input[1])
+      cost = parse(Float64, input[2])
+      pathString = split(input[3],';')
+      numPaths = length(pathString)-1
+      push!(capCostFull, cost)
+      paths = zeros(Int64, numPaths,2)
+      for i=1:numPaths
+        nodeString = split(pathString[i],'-')
+        paths[i,1] = parse(Int64, nodeString[1])
+        paths[i,2] = parse(Int64, nodeString[2])
+      end
+      capPathsFull[index] = paths
+      index += 1
+    end
+  end
+
   numCapacityGroups = length(capCostTree)
-  println("numCapacityGroups")
-  println(numCapacityGroups)
-  println("capCostTree:")
-  println(capCostTree)
-  println("capPathsTree:")
-  println(capPathsTree)
 
   #### Generate helper data structures
 
@@ -237,8 +251,8 @@ for instance = 1:numInstances
   #affinePathObj[instance,1] = affinePathLocalFS(numNodes, numSupplyNodes, Γ, Atree, Ptree, invCost, dLossPenalty, PCtree, dmean, dvar, F0return, Fdreturn, affine_xreturn, affinePathSolTime, instance);
   #affinePathObj[instance,2] = affinePathLocalFS(numNodes, numSupplyNodes, Γ, Atree, Pfull, invCost, dLossPenalty, PCfull, dmean, dvar, F0return, Fdreturn, affine_xreturn, affinePathSolTime, instance);
 
-  affineXiTreeObj[instance,1] = affineXiTree(numNodes, numSupplyNodes, Γ, Atree, Ptree, Ptree, parent, kids,             offspr, offsprNr, invCost, dLossPenalty, PCtree, dmean, dvar, F0return, Fdreturn, affine_xreturn, affineXiTreeSolTime, instance);
-  affineXiObj[instance,1] =         affineXi(numNodes, numSupplyNodes, Γ, Atree, Pfull, Ptree, parent, kids, offsprFull, offspr, offsprNr, invCost, dLossPenalty, PCfull, dmean, dvar, F0return, Fdreturn, affine_xreturn, affineXiSolTime,     instance);
+  affineXiTreeObj[instance,1] = affineXiTree(numNodes, numSupplyNodes, numCapacityGroups, capCostTree, capPathsTree, Γ, Atree, Ptree, Ptree, parent, kids,             offspr, offsprNr, invCost, dLossPenalty, PCtree, dmean, dvar, F0return, Fdreturn, affine_xreturn, affineXiTreeSolTime, instance);
+  affineXiObj[instance,1] =         affineXi(numNodes, numSupplyNodes, numCapacityGroups, capCostFull, capPathsFull, Γ, Atree, Pfull, Ptree, parent, kids, offsprFull, offspr, offsprNr, invCost, dLossPenalty, PCfull, dmean, dvar, F0return, Fdreturn, affine_xreturn, affineXiSolTime,     instance);
 
   # Testing: passing tree into affineXi
   #affineXiObj[instance,1] =         affineXi(numNodes, numSupplyNodes, Γ, Atree, Ptree, Ptree, parent, kids, offspr, offspr, offsprNr, invCost, dLossPenalty, PCtree, dmean, dvar, F0return, Fdreturn, affine_xreturn, affineXiSolTime,     instance);

@@ -16,12 +16,9 @@
 
 ##############################################################################
 
-## TODO ##
-# Capacity var
-# Capacity costs
-# Flow costs (already there?)
-# Groups of capacity and flows, indexed by k
-# pp var replicate p, indexed by k
+## Beware ##
+# Note that the destination is indexed by product side from 0,
+#   so when reading it in, index properly
 
 
 from gurobipy import *
@@ -54,11 +51,8 @@ import sys
 def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
                   bits, invCost, flowCost, arcs, paths, capCost, capPaths, \
                   pathGroup, instance):
-    
-    numGroups = len(capCost)
 
-    for i,j in paths:
-      print i,j,flowCost[(i,j)], "\n"
+    numGroups = len(capCost)
 
     #trajectory_file = open('IO/log_instance_' + str(instance) + '.txt','w')
     #trajectory_file.write("m.objVal, ")
@@ -88,7 +82,7 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
     s_plant = {}
 
     s_prod = {}
-    
+
     # capacity variables
     cap = {}
 
@@ -107,7 +101,7 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
         s_prod[j] = m.addVar(lb=0.0, name='s_%s' % j, obj=invCost[j+len(plants)])
 
         m.update()
-        
+
     for g in range(numGroups):
         cap[g] = m.addVar(lb=0.0, name='cap_%s' % g, obj=capCost[g])
 
@@ -146,9 +140,9 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
     for i in plants:
 
         p[i] = bi.addVar()
-    
+
     for g in range(numGroups):
-        
+
         pp[g] = bi.addVar()
 
     for i in allNodes:
@@ -241,7 +235,7 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
         for i in plants:
 
             p[i].setAttr("obj",-s_plant[i].x)
-        
+
         for g in range(numGroups):
             pp[g].setAttr("obj", -cap[g].x)
 
@@ -252,7 +246,7 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
         bi.optimize()
 
         #if (bi.objVal > delta.x) or (bi.objVal <= delta.x and bi.objVal + bi.MIPGap * abs(bi.objVal) - delta.x > master_tolerance * m.objVal) or m.objVal == 0:
-        if (bi.objVal > delta.x):
+        if (bi.objVal > delta.x) or m.objVal == 0:
 
             #add columns (variables) to the master problem
 
@@ -276,11 +270,11 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
 
                 m.addConstr(quicksum(flow[i,j, count_constr] for i,j in paths.select('*',j)) + lost[j, count_constr] + s_prod[j] >= d[j].x)
 
-            # 
+            #
             for g in range(numGroups): # CHECK if capPaths can take this function select
                 m.addConstr(quicksum(flow[i,j, count_constr] for i,j,g in pathGroup.select('*','*',g)) <= cap[g])
-            
-            # Lost sales constaint 
+
+            # Lost sales constaint
             m.addConstr(quicksum(flow[i,j, count_constr] * flowCost[(i,j)] for i,j in paths) + quicksum(lost[j, count_constr]*underage_margin[j] for j in products)<= delta)
 
             count_constr += 1
@@ -288,7 +282,8 @@ def ro_opt_rowcol(plants, products, allNodes, dmean, dvar, underage_margin, \
             is_opt = False
 
             if bi.status == GRB.Status.TIME_LIMIT:
-              time_limit = time_limit + 60
+              #time_limit = time_limit + 60
+              time_limit = 60
               bi.setParam("TimeLimit", time_limit)
             if bi.status == GRB.Status.OPTIMAL:
               time_limit = 60
@@ -398,10 +393,11 @@ print ("instance: ", instance)
 
 # 5 - length(find(demandNodes)) ),
 
+# 6 - numCapacityGroups
+
 sizeFile  = open("./IO/instance_"+str(instance)+"_size.txt", "r")
 
 sizeInput = sizeFile.read().strip().split(',')
-
 
 
 
@@ -418,6 +414,9 @@ products = xrange(num_products)
 allNodes = xrange(num_plants+num_products)
 
 numNodes[0] = num_plants+num_products
+
+numCapacityGroups = int(sizeInput[6]) # this number includes groups with empty arc set
+# The one generated dynamically when reading the file is more accurate.
 
 #samples = xrange(1000) # not used anywhere
 
@@ -581,7 +580,7 @@ for line_in in arcFile:
 
 arcs = tuplelist(arcs)
 
-# TODO 
+# TODO
 # Remove pathGroupTree and pathGroupFull, using the tuple versions at the moement
 
 # Generalized capacity constraints, for groups of paths.
@@ -590,6 +589,7 @@ arcs = tuplelist(arcs)
 #       probably only do soft constraints.
 # cCostTree: per unit capacity cost for each group of arcs.
 # cPathsTree: paths included in each capacitated group
+# All three data structures indexed in the same way by g
 cTree = {}
 cCostTree = {}
 cPathsTree = {}
@@ -597,21 +597,21 @@ capacityTreeFile = open("IO/instance_"+str(instance)+"_capacityTree.txt", "r")
 index = 0
 for line_in in capacityTreeFile:
 
-    line = line_in.strip().split(',')    
-    arcString = line[2].strip().split(';')    
+    line = line_in.strip().split(',')
+    arcString = line[2].strip().split(';')
     if len(arcString) == 1: # no arcs
         continue
 
-    cTree[index] = float(line[0])    
+    cTree[index] = float(line[0])
     cCostTree[index] = float(line[1])
     cPathsTree[index] = () # tuple is hashable
-    
+
     for i in range(len(arcString)):
         pairs = arcString[i].strip().split('-')
         if len(pairs) < 2:
             continue
         source = int(pairs[0]) - 1
-        sink = int(pairs[1]) - 1
+        sink = int(pairs[1]) - 1 - num_plants
         cPathsTree[index] = cPathsTree[index] + ([source, sink],)
     index += 1
 
@@ -626,6 +626,7 @@ for g in range(len(cPathsTree)):
         pathGroupTreeTuple += [(i,j,g)]
 pathGroupTreeTuple = tuplelist(pathGroupTreeTuple)
 
+
 cFull = {}
 cCostFull = {}
 cPathsFull = {}
@@ -633,21 +634,21 @@ capacityFullFile = open("IO/instance_"+str(instance)+"_capacityFull.txt", "r")
 index = 0
 for line_in in capacityFullFile:
 
-    line = line_in.strip().split(',')    
-    arcString = line[2].strip().split(';')        
+    line = line_in.strip().split(',')
+    arcString = line[2].strip().split(';')
     if len(arcString) == 1: # no arcs
         continue
 
-    cFull[index] = float(line[0])    
+    cFull[index] = float(line[0])
     cCostFull[index] = float(line[1])
     cPathsFull[index] = () # tuple is hashable
-    
+
     for i in range(len(arcString)):
         pairs = arcString[i].strip().split('-')
         if len(pairs) < 2:
             continue
         source = int(pairs[0]) - 1
-        sink = int(pairs[1]) - 1
+        sink = int(pairs[1]) - 1 - num_plants
         cPathsFull[index] = cPathsFull[index] + ([source, sink],)
     index += 1
 

@@ -851,12 +851,13 @@ end
 # offspr: Dict(), root -> [offsprings]
 # offsprNr: contains root too
 #
-function affineXiTree(n, nS, Γ, Atree, P, Ptree, parent, kids, offspr, offsprNr, h, b, c, dmean, dvar, F0return, Fdreturn, xreturn, solveTime, instance)
+function affineXiTree(n, nS, numCapacityGroups, capCost, capPaths, Γ, Atree, P, Ptree, parent, kids, offspr, offsprNr, h, b, c, dmean, dvar, F0return, Fdreturn, xreturn, solveTime, instance)
   model = RobustModel(solver=GurobiSolver(Method=2, Crossover=0, BarConvTol=0.000001));
   #model = RobustModel();
 
   # Set up variables
   @variable(model, x[1:n] >= 0); # inventory decisions
+  @variable(model, cap[1:numCapacityGroups] >= 0) ## generalized capacity
   FdIndices = String[]
   F0Indices = String[]
   SdIndices = String[]
@@ -867,9 +868,7 @@ function affineXiTree(n, nS, Γ, Atree, P, Ptree, parent, kids, offspr, offsprNr
     for i=1:n
       if P[i,j] == 1
         push!(F0Indices,"$(i)_$(j)")
-        for k=j
-          push!(FdIndices,"$(i)_$(j)_$(k)")
-        end
+        push!(FdIndices,"$(i)_$(j)_$(j)")
       end
     end
   end
@@ -919,6 +918,19 @@ function affineXiTree(n, nS, Γ, Atree, P, Ptree, parent, kids, offspr, offsprNr
     @constraint(model, x[j] + sum([(P[i,j] == 1 ? F0["$(i)_$(j)"] : 0 ) for i=1:n]) + S0["$(j)"] >= dmean[j])
   end
 
+  ## generalized capacity - old
+  #for g=1:numCapacityGroups
+  #  paths = capPaths[g]
+  #  @constraint(model, cap[g] >= sum([(ξ[paths[t,2]]*Fd["$(paths[t,1])_$(paths[t,2])_$(paths[t,2])"] + F0["$(paths[t,1])_$(paths[t,2])"]) for t=1:size(paths,1)]))
+  #end
+
+  ## generalized capacity - new, only about demand nodes
+  for g=1:numCapacityGroups
+    paths = capPaths[g]
+    # all going to the same demand node j
+    @constraint(model, cap[g] >= sum([(Fd["$(paths[t,1])_$(paths[t,2])_$(paths[t,2])"] + F0["$(paths[t,1])_$(paths[t,2])"]) for t=1:size(paths,1)]))
+  end
+
   # supply node capacity/conservation constraints:
   #for i=1:n
   #  @constraint(model, x[i] >= sum([(P[i,j] == 1 ? sum([ξ[s]*Fd["$(i)_$(j)_$(s)"] for s=j]) + F0["$(i)_$(j)"] : 0) for j=(nS+1):n]))
@@ -956,7 +968,9 @@ function affineXiTree(n, nS, Γ, Atree, P, Ptree, parent, kids, offspr, offsprNr
   # We will use the non-macro version of setObjective, although
   # we could use the macro version if we wanted to.
   # Remember: objectives must be certain.
-  @objective(model, :Min, sum([h[i]*x[i] for i=1:n]) + z)
+  @objective(model, :Min, sum([h[i]*x[i] for i=1:n])
+                        + sum([capCost[g]*cap[g] for g=1:numCapacityGroups])
+                        + z)
 
   tic()
   status = solve(model)
@@ -978,7 +992,8 @@ function affineXiTree(n, nS, Γ, Atree, P, Ptree, parent, kids, offspr, offsprNr
   end
 
   aObj = getobjectivevalue(model)
-  return sum([h[i]*getvalue(x[i]) for i=1:n]) + getvalue(z)
+  return aObj
+  #return sum([h[i]*getvalue(x[i]) for i=1:n]) + getvalue(z)
 end
 
 
@@ -1101,17 +1116,6 @@ function affineXiTreeLLG(n, nS, Γ, Atree, P, Ptree, parent, kids, offspr, offsp
   status = solve(model)
   solveTime[instance] = toc()
 
-#  for i=1:n
-#    for j=1:n
-#      if P[i,j] == 1
-#        F0return[i,j] = getvalue(F0["$(i)_$(j)"])
-#        for k=1:n
-#          Fdreturn[i,j,k] = getvalue(Fd["$(i)_$(j)_$(k)"])
-#        end
-#      end
-#    end
-#  end
-
   for i=1:n
     xreturn[i] = getvalue(x[i])
   end
@@ -1166,12 +1170,13 @@ end
 # kids: Dict(), parent -> [kids]
 # offspr: Dict(), root -> [offsprings]
 # offsprNr: contains root too
-function affineXi(n, nS, Γ, Atree, P, Ptree, parent, kids, offsprFull, offspr, offsprNr, h, b, c, dmean, dvar, F0return, Fdreturn, xreturn, solveTime, instance)
+function affineXi(n, nS, numCapacityGroups, capCost, capPaths, Γ, Atree, P, Ptree, parent, kids, offsprFull, offspr, offsprNr, h, b, c, dmean, dvar, F0return, Fdreturn, xreturn, solveTime, instance)
   model = RobustModel(solver=GurobiSolver(Method=2, Crossover=0, BarConvTol=0.000001));
   #model = RobustModel();
 
   # Set up variables
   @variable(model, x[1:n] >= 0); # inventory decisions
+  @variable(model, cap[1:numCapacityGroups] >= 0) ## generalized capacity
   FdIndices = String[]
   F0Indices = String[]
   SdIndices = String[]
@@ -1182,9 +1187,7 @@ function affineXi(n, nS, Γ, Atree, P, Ptree, parent, kids, offsprFull, offspr, 
     for i=1:n
       if P[i,j] == 1
         push!(F0Indices,"$(i)_$(j)")
-        for k=j
-          push!(FdIndices,"$(i)_$(j)_$(k)")
-        end
+        push!(FdIndices,"$(i)_$(j)_$(j)")
       end
     end
   end
@@ -1217,6 +1220,19 @@ function affineXi(n, nS, Γ, Atree, P, Ptree, parent, kids, offsprFull, offspr, 
     @constraint(model, x[j] + sum([(P[i,j] == 1 ? Fd["$(i)_$(j)_$(j)"] + F0["$(i)_$(j)"] : 0 ) for i=1:n]) + Sd["$(j)"] + S0["$(j)"] >= dmean[j] + dvar[j])
     # ξ_j = 0
     @constraint(model, x[j] + sum([(P[i,j] == 1 ? F0["$(i)_$(j)"] : 0 ) for i=1:n]) + S0["$(j)"] >= dmean[j])
+  end
+
+  ## generalized capacity - old
+  #for g=1:numCapacityGroups
+  #  paths = capPaths[g]
+  #  @constraint(model, cap[g] >= sum([(ξ[paths[t,2]]*Fd["$(paths[t,1])_$(paths[t,2])_$(paths[t,2])"] + F0["$(paths[t,1])_$(paths[t,2])"]) for t=1:size(paths,1)]))
+  #end
+
+  ## generalized capacity - new, only about demand nodes
+  for g=1:numCapacityGroups
+    paths = capPaths[g]
+    # all going to the same demand node j
+    @constraint(model, cap[g] >= sum([(Fd["$(paths[t,1])_$(paths[t,2])_$(paths[t,2])"] + F0["$(paths[t,1])_$(paths[t,2])"]) for t=1:size(paths,1)]))
   end
 
   # supply node capacity/conservation constraints:
@@ -1279,7 +1295,10 @@ function affineXi(n, nS, Γ, Atree, P, Ptree, parent, kids, offsprFull, offspr, 
   # We will use the non-macro version of setObjective, although
   # we could use the macro version if we wanted to.
   # Remember: objectives must be certain.
-  @objective(model, :Min, sum([h[i]*x[i] for i=1:n]) + z)
+  # generalized capacity constraints
+  @objective(model, :Min, sum([h[i]*x[i] for i=1:n])
+                        + sum([capCost[g]*cap[g] for g=1:numCapacityGroups])
+                        + z)
 
   tic()
   status = solve(model)
@@ -1301,5 +1320,17 @@ function affineXi(n, nS, Γ, Atree, P, Ptree, parent, kids, offsprFull, offspr, 
   end
 
   aObj = getobjectivevalue(model)
-  return sum([h[i]*getvalue(x[i]) for i=1:n]) + getvalue(z)
+  #return sum([h[i]*getvalue(x[i]) for i=1:n]) + getvalue(z)
+  return aObj
+end
+
+function hasPath(paths, i, j)
+  has = false
+  numPaths = size(paths, 1)
+  for k=1:numPaths
+    if paths[k,1] == i && paths[k,2] == j
+      has = true
+    end
+  end
+  return has
 end

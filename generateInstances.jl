@@ -16,7 +16,7 @@ engagingDir = "IO/"
 srand(314);
 tempDir = engagingDir;
 cleanDir = engagingDir;
-numInstances = 1;
+numInstances = 200;
 numNodesList = zeros(numInstances);
 affineObj = zeros(numInstances,2); # first column for tree network, second for general network based on this tree
 affineSolTime = zeros(numInstances);
@@ -80,13 +80,23 @@ for instance=1:numInstances
   #numFullArcs = sum(Afull);
 
 
-  # For generalized constraints
-  # numGroups
-  # For each group, have 1 to
-  numCapacityGroups = rand(1:10) # Change later for test
-  capProb = rand(numCapacityGroups) * 10 / numNodes # determines how many arcs per capacity group
-  capPerGroup = rand(numCapacityGroups) * 1000 * 10 / 2 # demand is 1000 at each node # determines the capacity for this group
-  capCostPerGroup = rand(numCapacityGroups) * b
+  # For generalized constraints: old, before Aug 7
+  #numCapacityGroups = rand(1:100) # Change later for test
+  #capProb = rand(numCapacityGroups) * 100.0 / numNodes # determines how many arcs per capacity group
+  #capPerGroup = rand(numCapacityGroups) * 1000 * 10 / 2 # demand is 1000 at each node # determines the capacity for this group
+  #capCostPerGroup = rand(numCapacityGroups) * b
+
+  # Capacity group generation: new, after Aug 7
+  # Parameter for instance is α ∈ [0,1], fraction of paths in each group
+  # For each demand node d, get the number of paths ending at d: g_d
+  # Randomly partition the g_d paths into min(g_d, Int16(1/α)) groups
+  # Affine policy tractability:
+  # In the special strucutre,all paths in one group go to the same demand node,
+  # therefore we can actually have very efficient dualization with local policy
+  numCapacityGroups = 0
+  capCostPerGroup = rand() * b
+  α = rand()
+
 
   println(string("instance: ", instance, ". Line 82."))
 
@@ -224,13 +234,16 @@ for instance=1:numInstances
 
   # Create files for input
   sizeFile = open(string(dir,"size.txt"), "w");
+  numSupplyNodes = length(find(supplyNodes))
+  numDemandNodes = length(find(demandNodes))
   write(sizeFile,
         string(numNodes, ",",
                numTreeArcs, ",",
                numFullArcs, ",",
                numLevels, ",",
-               length(find(supplyNodes)), ",",
-               length(find(demandNodes)) ),
+               numSupplyNodes, ",",
+               numDemandNodes, ",",
+               numCapacityGroups),
         "\n");
   close(sizeFile);
   # i,j,flow cost for arc (i,j)
@@ -249,48 +262,53 @@ for instance=1:numInstances
   close(adjFullFile);
 
   pathTreeFile = open(string(dir,"pathTree.txt"), "w");
-  capacityTreeFile = open(string(dir,"capacityTree.txt"), "w");
-  capacityTree = Dict()
-  for j=1:numCapacityGroups
-    capacityTree[j] = string(capPerGroup[j], ",", capCostPerGroup[j], ",") # TODO check cost
-  end
   nz = findn(Ptree)
   for i=1:length(nz[1])
     write(pathTreeFile, string(nz[1][i], ",", nz[2][i], ",", PCtree[nz[1][i],nz[2][i]]),"\n")
-    for j=1:numCapacityGroups
-      if rand() < capProb[j]
-        capacityTree[j] = string(capacityTree[j], nz[1][i], "-", nz[2][i], ";")
-      end
-    end
   end
   close(pathTreeFile);
-  for j=1:numCapacityGroups
-    write(capacityTreeFile, string(capacityTree[j],"\n"))
-  end
-  close(capacityTreeFile)
 
   pathFullFile = open(string(dir,"pathFull.txt"), "w");
-  capacityFullFile = open(string(dir,"capacityFull.txt"), "w");
-  capacityFull = Dict()
-  for j=1:numCapacityGroups
-    capacityFull[j] = capacityTree[j]
-  end
   nz = findn(Pfull)
   for i=1:length(nz[1])
     write(pathFullFile, string(nz[1][i], ",", nz[2][i], ",", PC[nz[1][i],nz[2][i]]),"\n")
-    for j=1:numCapacityGroups
-      if rand() < capProb[j]
-        if (Ptree[nz[1][i],nz[2][i]] == 0)
-          capacityFull[j] = string(capacityFull[j], nz[1][i], "-", nz[2][i], ";")
-        end
-      end
-    end
   end
   close(pathFullFile);
+
+  #
+  # capacity groups
+  capacityTreeFile = open(string(dir,"capacityTree.txt"), "w");
+  capacityTree = Dict()
+  capacityFullFile = open(string(dir,"capacityFull.txt"), "w");
+  capacityFull = Dict()
+  ind = 0
+  for j=numSupplyNodes+1:numNodes
+    numJGroups = floor(α*sum(Ptree[:,j]))+1
+    for k=1:numJGroups
+      # capacity per group, capacity cost per group
+      capThisGroup = 1000
+      capCostThisGroup = rand() * b
+      capacityTree[ind+k] = string(capThisGroup, ",", capCostThisGroup, ",")
+      capacityFull[ind+k] = string(capThisGroup, ",", capCostThisGroup, ",")
+    end
+    for i=1:sum(Pfull[:,j])
+      ancestor = findn(Pfull[:,j])[i]
+      toGroup = rand(1:numJGroups)
+      if Ptree[ancestor,j] == 1
+        capacityTree[ind+toGroup] = string(capacityTree[ind+toGroup], ancestor, "-", j, ";")
+      end
+      capacityFull[ind+toGroup] = string(capacityFull[ind+toGroup], ancestor, "-", j, ";")
+    end
+    ind += numJGroups
+    numCapacityGroups += numJGroups
+  end
   for j=1:numCapacityGroups
+    write(capacityTreeFile, string(capacityTree[j],"\n"))
     write(capacityFullFile, string(capacityFull[j],"\n"))
   end
+  close(capacityTreeFile)
   close(capacityFullFile)
+
 
   # inv cost: node index (for all supply nodes), cost
   invCostFile = open(string(dir,"invCost.txt"), "w");
@@ -324,10 +342,10 @@ for instance=1:numInstances
   #enumObj[instance,1] = fullyAdapt(numNodes, Γ,        Ptree, invCost, dLossPenalty, PCtree, dmean, dvar, xreturn, enumSolTime);
   #enumObj[instance,2] = fullyAdapt(numNodes, Γ,        Pfull, invCost, dLossPenalty, PC, dmean, dvar, xreturn, enumSolTime);
 
-  println(string("instance, numNodes, numLevels, intensity, h_low, h_high, f_root, survivability, pArc, numFullArcs, numTreeArcs, numCapacityGroups, capProb, capPerGroup, capCostPerGroup, ",
+  println(string("instance, numNodes, numLevels, intensity, h_low, h_high, f_root, survivability, pArc, numFullArcs, numTreeArcs, numCapacityGroups, alpha, ",
                  instance, ", ", numNodes, ", ", numLevels, ", ", intensity, ", ", h_low, ", ",
                  h_high, ", ", f_root, ", ", survivability, ", ", pArc, ", ", numTreeArcs, ", ",
-                 numFullArcs, ", ", numCapacityGroups, ", ", sum(capProb)/numCapacityGroups, ", ", sum(capPerGroup)/numCapacityGroups, ", ", sum(capCostPerGroup)/numCapacityGroups))
+                 numFullArcs, ", ", numCapacityGroups, ", ", α))
 
 end
 
