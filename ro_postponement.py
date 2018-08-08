@@ -580,9 +580,6 @@ for line_in in arcFile:
 
 arcs = tuplelist(arcs)
 
-# TODO
-# Remove pathGroupTree and pathGroupFull, using the tuple versions at the moement
-
 # Generalized capacity constraints, for groups of paths.
 # Length of each of the data structures is the total number of groups
 # cTree: capacities for different groups. This might not be needed since we
@@ -616,13 +613,11 @@ for line_in in capacityTreeFile:
     index += 1
 
 numGroupsTree = index
-pathGroupTree = numpy.zeros((numNodes[0],numNodes[0],numGroupsTree))
 pathGroupTreeTuple = []
 for g in range(len(cPathsTree)):
     for e in range(len(cPathsTree[g])):
         i = cPathsTree[g][e][0]
         j = cPathsTree[g][e][1]
-        pathGroupTree[i,j,g] = 1
         pathGroupTreeTuple += [(i,j,g)]
 pathGroupTreeTuple = tuplelist(pathGroupTreeTuple)
 
@@ -653,13 +648,11 @@ for line_in in capacityFullFile:
     index += 1
 
 numGroupsFull = index
-pathGroupFull = numpy.zeros((numNodes[0],numNodes[0],numGroupsFull))
 pathGroupFullTuple = []
 for g in range(len(cPathsFull)):
     for e in range(len(cPathsFull[g])):
         i = cPathsFull[g][e][0]
         j = cPathsFull[g][e][1]
-        pathGroupFull[i,j,g] = 1
         pathGroupFullTuple += [(i,j,g)]
 pathGroupFullTuple = tuplelist(pathGroupFullTuple)
 
